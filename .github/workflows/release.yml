@@ -1,0 +1,83 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+  CONFIGURATION: Release
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  DOTNET_VERSION: '9.0'
+  PROJECT_NAME: 'PCSleepWatcher'
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Fetch all branches (for tag branch verification)
+        run: git fetch --all
+
+      - name: Verify tag is on main branch
+        shell: pwsh
+        run: |
+          $branches = git branch -a --contains ${{ github.sha }}
+          if (-not ($branches -match 'main' -or $branches -match 'origin/main')) {
+            Write-Error "❌ Tag is not on main or origin/main. Aborting release."
+            exit 1
+          }
+          Write-Output "✅ Tag is on: $branches"
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}.x
+
+      - name: Restore dependencies
+        run: dotnet restore
+
+      - name: Publish self-contained build
+        run: dotnet publish -c $env:CONFIGURATION -r win-x64 -p:PublishSingleFile=true -p:SelfContained=true -o self-contained
+
+      - name: Publish framework-dependent build
+        run: dotnet publish -c $env:CONFIGURATION -r win-x64 -p:PublishSingleFile=true -p:SelfContained=false -o framework-dependent
+        
+      - name: Create version.json
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}"
+          $json = @{ version = $version } | ConvertTo-Json
+          $json | Out-File -Encoding UTF8 -FilePath version.json
+
+      - name: Create release archives
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}"
+          $version = $version.Substring(1)
+          $frameworkVersion = "${{ env.DOTNET_VERSION }}.0"
+          Copy-Item version.json self-contained/
+          Copy-Item version.json framework-dependent/
+          
+          # Self-contained archive
+          Compress-Archive -Path self-contained\* -DestinationPath "${{ env.PROJECT_NAME }}-$version-win-x64-selfcontained.zip"
+          
+          # Framework-dependent archive (already includes .NET version)
+          Compress-Archive -Path framework-dependent\* -DestinationPath "${{ env.PROJECT_NAME }}-$version-win-x64-net$frameworkVersion.zip"
+
+      - name: Upload to GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: |
+            ${{ env.PROJECT_NAME }}-*-selfcontained.zip
+            ${{ env.PROJECT_NAME }}-*-net${{ env.DOTNET_VERSION }}.0.zip

@@ -1,0 +1,10 @@
+{
+  "IsOn": false,
+  "IntervalSeconds": 180,
+  "LastSleepSend": "",
+  "WakeUpSourceExclusions": [
+    "кнопка питания",
+    "1",
+    "power button"
+  ]
+}
